@@ -28,16 +28,6 @@ from google.assistant.embedded.v1alpha1 import embedded_assistant_pb2
 from google.rpc import code_pb2
 from tenacity import retry, stop_after_attempt, retry_if_exception
 
-# try:
-#     from . import (
-#         assistant_helpers,
-#         audio_helpers
-#     )
-# except SystemError:
-#     import assistant_helpers
-#     import audio_helpers
-
-#import assistant_helpers, audio_helpers
 import asshelp as assistant_helpers
 import audhelp as audio_helpers
 
@@ -45,6 +35,8 @@ from reacting_to_events import HumanGreeter
 import time
 import sys
 import qi
+import sounddevice as sd
+import soundfile as sf
 
 ASSISTANT_API_ENDPOINT = 'embeddedassistant.googleapis.com'
 END_OF_UTTERANCE = embedded_assistant_pb2.ConverseResponse.END_OF_UTTERANCE
@@ -111,8 +103,7 @@ class SampleAssistant(object):
 
         Returns: True if conversation should continue.
         """
-        #print("\nTOP OF CONVERSE FUNCTION")
-        #print(self.conversation_stream._audio_type)
+        # SETS INITIAL STREAM, the wav one
         if self.conversation_stream == None and self.conversation_stream_wav:
             self.conversation_stream = self.conversation_stream_wav
         
@@ -188,6 +179,10 @@ class SampleAssistant(object):
         if continue_conversation and self.conversation_stream._audio_type == 'wav':
             self.conversation_stream = self.conversation_stream_sd
             # PLAY USF FACTS INTRO, NEED RECORDING
+            data, fs = sf.read('intro.wav', dtype='float32')
+            sd.play(data, fs)
+            time.sleep(3.6)
+
 
         if not continue_conversation and self.conversation_stream_wav:
             self.conversation_stream = self.conversation_stream_wav
@@ -328,7 +323,7 @@ def main(api_endpoint, credentials, verbose,
             sample_width=audio_sample_width
         )
 
-        print("\nOUTPUT = " + output_audio_file)
+        #print("\nOUTPUT = " + output_audio_file)
     
     # Configure audio source and sink for sounddevice.
     audio_device = None
