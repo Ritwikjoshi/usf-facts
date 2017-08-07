@@ -18,32 +18,133 @@ import json
 import logging
 import os.path
 
+#grpc, click, oath
 import click
 import grpc
 import google.auth.transport.grpc
 import google.auth.transport.requests
 import google.oauth2.credentials
 
+#Assistant Crap
 from google.assistant.embedded.v1alpha1 import embedded_assistant_pb2
 from google.rpc import code_pb2
 from tenacity import retry, stop_after_attempt, retry_if_exception
 
+#Helper Files
 import asshelp as assistant_helpers
 import audhelp as audio_helpers
 
-from reacting_to_events import HumanGreeter
+#from reacting_to_events import HumanGreeter
 import time
 import sys
 import qi
 import sounddevice as sd
 import soundfile as sf
+from naoqi import ALProxy
 
+#Assistant Constant Variables
 ASSISTANT_API_ENDPOINT = 'embeddedassistant.googleapis.com'
 END_OF_UTTERANCE = embedded_assistant_pb2.ConverseResponse.END_OF_UTTERANCE
 DIALOG_FOLLOW_ON = embedded_assistant_pb2.ConverseResult.DIALOG_FOLLOW_ON
 CLOSE_MICROPHONE = embedded_assistant_pb2.ConverseResult.CLOSE_MICROPHONE
 DEFAULT_GRPC_DEADLINE = 60 * 3 + 5
 
+#GLOBAL VARIABLES
+IP = '192.168.1.69'
+PORT = 9559
+FACESIZE = 1.0
+wait_for_user_trigger = False
+motion = ALProxy("ALMotion", IP, PORT)
+tracker = ALProxy("ALTracker", IP, PORT)
+postureProxy = ALProxy("ALRobotPosture", IP, PORT)
+
+class HumanGreeter(object):
+    """
+    A simple class to react to face detection events.
+    """
+
+    def __init__(self, app):
+        """
+        Initialisation of qi framework and event detection.
+        """
+        super(HumanGreeter, self).__init__()
+        app.start()
+        session = app.session
+        # Get the service ALMemory.
+        self.memory = session.service("ALMemory")
+        # Connect the event callback.
+        self.subscriber = self.memory.subscriber("FaceDetected")
+        self.subscriber.signal.connect(self.on_human_tracked)
+        # Get the services ALTextToSpeech and ALFaceDetection.
+        self.tts = session.service("ALTextToSpeech")
+        self.face_detection = session.service("ALFaceDetection")
+        self.face_detection.subscribe("HumanGreeter")
+        self.got_face = False
+
+    def on_human_tracked(self, value):
+        """
+        Callback for event FaceDetected.
+        """
+        global wait_for_user_trigger
+        global motion
+        global tracker
+        global postureProxy
+
+        if value == []:  # empty value when the face disappears
+            self.got_face = False
+        elif not self.got_face:  # only speak the first time a face appears
+            
+            #Causes Assistant App To Trigger/Turn On
+            self.got_face = True
+            wait_for_user_trigger = True
+
+            #Wakes up robot and optionaly sit
+            motion.wakeUp()
+            #Uncomment line below to make sit
+            # postureProxy.goToPosture("Crouch", 1.0)
+            
+            # Add target to track.
+            targetName = "Face"
+            faceWidth = FACESIZE
+            tracker.registerTarget(targetName, faceWidth)
+
+            # Then, start tracker.
+            tracker.track(targetName)
+
+            #print "I saw a face!"
+            #self.tts.say("Welcome Fuck Face!")
+            # First Field = TimeStamp.
+            # timeStamp = value[0]
+            # print "TimeStamp is: " + str(timeStamp)
+
+            # Second Field = array of face_Info's.
+            # faceInfoArray = value[1]
+            # for j in range( len(faceInfoArray)-1 ):
+            #     faceInfo = faceInfoArray[j]
+
+            #     # First Field = Shape info.
+            #     faceShapeInfo = faceInfo[0]
+
+            #     # Second Field = Extra info (empty for now).
+            #     faceExtraInfo = faceInfo[1]
+
+            #     print "Face Infos :  alpha %.3f - beta %.3f" % (faceShapeInfo[1], faceShapeInfo[2])
+            #     print "Face Infos :  width %.3f - height %.3f" % (faceShapeInfo[3], faceShapeInfo[4])
+            #     print "Face Extra Infos :" + str(faceExtraInfo)
+
+    # def run(self):
+    #     """
+    #     Loop on, wait for events until manual interruption.
+    #     """
+    #     print "Starting HumanGreeter"
+    #     try:
+    #         while True:
+    #             time.sleep(1)
+    #     except KeyboardInterrupt:
+    #         print "Interrupted by user, stopping HumanGreeter"
+    #         self.face_detection.unsubscribe("HumanGreeter")
+    #         #stop
+    #         sys.exit(0)
 
 class SampleAssistant(object):
     """Sample Assistant that supports follow-on conversations.
@@ -287,6 +388,13 @@ def main(api_endpoint, credentials, verbose,
 
         $ python -m googlesamples.assistant -i <input file> -o <output file>
     """
+    
+    #GLOBAL VARS
+    global wait_for_user_trigger
+    global motion
+    global tracker
+    global postureProxy
+
     # Setup logging.
     logging.basicConfig(level=logging.DEBUG if verbose else logging.INFO)
 
@@ -377,8 +485,9 @@ def main(api_endpoint, credentials, verbose,
 
     
     # FACE DETECT SHIT
-    nao_ip = '192.168.1.69'
-    nao_port = 9559
+    nao_ip = IP
+    nao_port = PORT
+    wait_for_user_trigger = False
 
     try:
         # Initialize qi framework.
@@ -389,35 +498,74 @@ def main(api_endpoint, credentials, verbose,
                "Please check your script arguments. Run with -h option for help.")
         sys.exit(1)
 
-    #human_greeter = HumanGreeter(app)
+    human_greeter = HumanGreeter(app)
     #human_greeter.run()
 
+    try:
+        with SampleAssistant(conversation_stream,
+                             grpc_channel, grpc_deadline, conversation_stream_wav) as assistant:
+            # If file arguments are supplied:
+            # exit after the first turn of the conversation.
+            # if input_audio_file or output_audio_file:
+            #     assistant.converse()
+            #     return
+
+            # If no file arguments supplied:
+            # keep recording voice requests using the microphone
+            # and playing back assistant response using the speaker.
+            # When the once flag is set, don't wait for a trigger. Otherwise, wait.
+            
+            while True:
+                # if not wait_for_user_trigger:
+                #     click.pause(info='Press Enter to send a new request...')
+
+                if not wait_for_user_trigger:
+                    print('Waiting For A Face...')
+                    # Stop tracker.
+                    tracker.stopTracker()
+                    tracker.unregisterAllTargets()
+                    motion.rest()
+
+                while not wait_for_user_trigger:
+                    time.sleep(1)
+
+                continue_conversation = assistant.converse()
+                # wait for user trigger if there is no follow-up turn in
+                # the conversation.
+                wait_for_user_trigger = continue_conversation
+
+    except KeyboardInterrupt:
+        print('Program Ending, Unsubscribing Face Detection.')
+        human_greeter.face_detection.unsubscribe("HumanGreeter")
+        sys.exit(0)
 
     # assistant shit
-    with SampleAssistant(conversation_stream,
-                         grpc_channel, grpc_deadline, conversation_stream_wav) as assistant:
-        # If file arguments are supplied:
-        # exit after the first turn of the conversation.
-        # if input_audio_file or output_audio_file:
-        #     assistant.converse()
-        #     return
+    # with SampleAssistant(conversation_stream,
+    #                      grpc_channel, grpc_deadline, conversation_stream_wav) as assistant:
+    #     # If file arguments are supplied:
+    #     # exit after the first turn of the conversation.
+    #     # if input_audio_file or output_audio_file:
+    #     #     assistant.converse()
+    #     #     return
 
-        # If no file arguments supplied:
-        # keep recording voice requests using the microphone
-        # and playing back assistant response using the speaker.
-        # When the once flag is set, don't wait for a trigger. Otherwise, wait.
-        wait_for_user_trigger = not once
-        while True:
-            if wait_for_user_trigger:
-                click.pause(info='Press Enter to send a new request...')
-            continue_conversation = assistant.converse()
-            # wait for user trigger if there is no follow-up turn in
-            # the conversation.
-            wait_for_user_trigger = not continue_conversation
+    #     # If no file arguments supplied:
+    #     # keep recording voice requests using the microphone
+    #     # and playing back assistant response using the speaker.
+    #     # When the once flag is set, don't wait for a trigger. Otherwise, wait.
+    #     #wait_for_user_trigger = not once
 
-            # If we only want one conversation, break.
-            if once and (not continue_conversation):
-                break
+    #     wait_for_user_trigger = False
+    #     while True:
+    #         # if not wait_for_user_trigger:
+    #         #     click.pause(info='Press Enter to send a new request...')
+
+    #         while not wait_for_user_trigger:
+    #             time.sleep(1)
+
+    #         continue_conversation = assistant.converse()
+    #         # wait for user trigger if there is no follow-up turn in
+    #         # the conversation.
+    #         wait_for_user_trigger = continue_conversation
 
 if __name__ == '__main__':
     main()
